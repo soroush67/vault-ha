@@ -1,6 +1,6 @@
 ---
 # --- Vault version / packaging ---
-vault_version: "1.18.3"
+vault_version: "1.21.4"
 vault_apt_codename: "{{ ansible_distribution_release }}"
 
 # --- Cluster ---
