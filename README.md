@@ -51,12 +51,15 @@ playbooks/
   unseal.yml                Unseals every node (existing + newly-added) with 3 of the keys init.yml showed
   add_node.yml              Add a new node to the existing Raft cluster
   check_cluster.yml         Read-only: every node unsealed, optionally the real Raft peer list
+  manage_user.yml           Add/update or remove one userpass user + their own custom policy - see "Managing individual users"
   build_offline_repo.yml    Builds offline-repo/'s portable apt repo (vault + haproxy + every dependency) - see "Offline install"
   destroy.yml               Completely removes Vault (and HAProxy) from every node - all data, no undo - see "Destroying the cluster"
 offline-repo/               Portable: build once with real internet, copy the whole directory anywhere, docker-compose up -d there
   docker-compose.yml         One nginx service serving the flat apt repo
   nginx-autoindex.conf        Same stock-default.conf-wins fix kubespray-webui's Offline Install hit - see that project's CLAUDE.md gotcha #4
   packages/                  Populated by build_offline_repo.yml - empty until then
+policies/
+  example.hcl                A starting-point HCL policy - copy it per user, don't apply it unedited
 ```
 
 ## Usage
@@ -142,6 +145,48 @@ hang or fail trying to reach mirrors this host can't actually reach.
 `init.yml`/`unseal.yml`/`check_cluster.yml` are unaffected either way -
 they only ever talk to Vault's own API, never apt.
 
+## Managing individual users
+
+By default the only credential that exists is the root token from
+`init.yml` - fine for first bring-up, not something real people should
+share day-to-day. `playbooks/manage_user.yml` adds people as Vault's
+built-in `userpass` auth method users (so they log into the same web UI
+with a username/password), each with their **own custom policy** you
+write - there's no fixed set of built-in roles here, since what any given
+person should actually be able to touch is entirely specific to your
+setup.
+
+1. Write an HCL policy scoped to what that person needs - copy
+   `policies/example.hcl` as a starting point, don't apply it unedited.
+2. Add (or update) the user:
+
+   ```bash
+   ansible-playbook -i <inventory> playbooks/manage_user.yml \
+     -e vault_root_token=<root or a sufficiently privileged token> \
+     -e target_username=alice \
+     -e target_password='<a password you chose - not auto-generated>' \
+     -e target_policy_name=alice-policy \
+     -e target_policy_file=./policies/alice.hcl
+   ```
+
+   Safe to re-run: enabling `userpass` is skipped if already enabled,
+   re-uploading the same policy name overwrites it with the new file's
+   contents, and `vault write` on an existing user just updates their
+   password/policies.
+3. Give `alice` her username/password directly (out of band - this
+   playbook never writes them anywhere) - she logs in at
+   `https://<any node or the LB>:8200/ui` with them.
+4. Remove a user later (optionally her policy too, if nothing else
+   references it):
+
+   ```bash
+   ansible-playbook -i <inventory> playbooks/manage_user.yml \
+     -e vault_root_token=<token> \
+     -e target_username=alice \
+     -e target_state=absent \
+     -e target_policy_name=alice-policy
+   ```
+
 ## Destroying the cluster
 
 Completely removes Vault (and HAProxy, by default) from every node:
@@ -213,6 +258,27 @@ looked before any of this ran.
   configured means `apt-get update` hangs or fails outright instead of
   quietly using only the offline repo. Renamed, not deleted, so it's
   reversible if you ever reconnect the host to the internet.
+- **`manage_user.yml` targets `vault_cluster[0]` and shells out to the real
+  `vault` CLI**, the same style as `init.yml`/`unseal.yml`/
+  `check_cluster.yml`, rather than adding a new collection dependency
+  (e.g. `community.hashi_vault`) or the `uri` module just for this - one
+  fewer thing to install/version-pin, and it's already proven to work
+  against this cluster's TLS setup (`-ca-cert={{ vault_tls_dir }}/ca.pem`).
+- **Policies are per-user HCL files copied to the Vault node, not inlined
+  into a `vault policy write - <<EOF` shell heredoc** - real policies
+  contain quotes/braces that are painful and fragile to get right escaped
+  through Ansible's `command` module; copying a file and pointing
+  `vault policy write` at it sidesteps that entirely.
+- **No fixed admin/readwrite/readonly policy tiers** - deliberately, per
+  explicit request: every user gets a fully custom policy written for
+  them, since what a specific person should be able to touch is entirely
+  usage-specific and a fixed tier model would either be too broad or force
+  awkward workarounds for anyone who doesn't fit one of the three boxes.
+- **Passwords are operator-chosen via `-e target_password=...`, never
+  auto-generated** - per explicit request. Unlike `init.yml`'s unseal
+  keys (which Vault itself generates and can never show again), a
+  userpass password is something the operator picks and hands to that
+  person directly - there's nothing here for this playbook to "show once."
 - **`destroy.yml` refuses to run without `-e confirm_destroy=yes`**, checked
   as a normal per-host task at the top of *each* destructive play, not via
   a separate confirmation-only play. Tried that first - a `hosts:
@@ -234,7 +300,11 @@ looked before any of this ran.
 - **Audit logging** - not enabled by default; a real production Vault
   should have at least one audit device turned on.
 - **Automated snapshots/backups** of the Raft data directory.
-- **Auth methods/secrets engines/policies** - this only stands up the
-  cluster itself; configuring what Vault actually manages (KV mounts,
-  auth backends, policies) is deliberately left to you, it's entirely
-  usage-specific.
+- **Secrets engines** (KV mounts, database secrets, PKI, etc.) - this only
+  stands up the cluster and, via `manage_user.yml`, userpass
+  logins/policies; what those policies actually grant access *to* is
+  deliberately left to you, it's entirely usage-specific.
+- **Only the `userpass` auth method** is wired up (`manage_user.yml`) -
+  no LDAP/OIDC/other auth backends. Fine for a small team with
+  operator-issued credentials; revisit if you need SSO or don't want to
+  hand out passwords directly.
