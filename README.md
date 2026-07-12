@@ -166,8 +166,15 @@ setup.
      -e target_username=alice \
      -e target_password='<a password you chose - not auto-generated>' \
      -e target_policy_name=alice-policy \
-     -e target_policy_file=./policies/alice.hcl
+     -e target_policy_file="$(pwd)/policies/alice.hcl"
    ```
+
+   **`target_policy_file` must be an absolute path** (`$(pwd)/...` from the
+   repo root works) - the `copy` module resolves a relative one against
+   the *playbook's own directory* (`playbooks/`, plus a `playbooks/files/`
+   subdir it also checks), not against your current shell directory, so
+   e.g. plain `policies/alice.hcl` fails with "Could not find or access"
+   even though the file is right there one level up.
 
    Safe to re-run: enabling `userpass` is skipped if already enabled,
    re-uploading the same policy name overwrites it with the new file's
