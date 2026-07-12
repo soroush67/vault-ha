@@ -45,21 +45,22 @@ roles/
   vault_install/            Installs vault, templates vault.hcl (Raft storage + retry_join + TLS + ui=true), enables (not starts) the service
   vault_tls/                Generates the CA once + a per-node cert/key signed by it
   haproxy_lb/                Installs/configures HAProxy (TCP passthrough + Vault-aware health check)
+  vault_user/               Adds/updates/removes one userpass user + their custom policy - see "Managing individual users"
+    files/policies/           Per-user HCL policy files live here - Ansible finds them automatically, just a bare filename
+      example.hcl              A starting-point policy - copy it per user, don't apply it unedited
 playbooks/
   site.yml                  Full bring-up, in the dependency order that actually matters
   init.yml                  One-time: initializes the Raft cluster, shows unseal keys + root token ONCE
   unseal.yml                Unseals every node (existing + newly-added) with 3 of the keys init.yml showed
   add_node.yml              Add a new node to the existing Raft cluster
   check_cluster.yml         Read-only: every node unsealed, optionally the real Raft peer list
-  manage_user.yml           Add/update or remove one userpass user + their own custom policy - see "Managing individual users"
+  manage_user.yml           Thin wrapper around roles/vault_user - see "Managing individual users"
   build_offline_repo.yml    Builds offline-repo/'s portable apt repo (vault + haproxy + every dependency) - see "Offline install"
   destroy.yml               Completely removes Vault (and HAProxy) from every node - all data, no undo - see "Destroying the cluster"
 offline-repo/               Portable: build once with real internet, copy the whole directory anywhere, docker-compose up -d there
   docker-compose.yml         One nginx service serving the flat apt repo
   nginx-autoindex.conf        Same stock-default.conf-wins fix kubespray-webui's Offline Install hit - see that project's CLAUDE.md gotcha #4
   packages/                  Populated by build_offline_repo.yml - empty until then
-policies/
-  example.hcl                A starting-point HCL policy - copy it per user, don't apply it unedited
 ```
 
 ## Usage
@@ -149,15 +150,16 @@ they only ever talk to Vault's own API, never apt.
 
 By default the only credential that exists is the root token from
 `init.yml` - fine for first bring-up, not something real people should
-share day-to-day. `playbooks/manage_user.yml` adds people as Vault's
-built-in `userpass` auth method users (so they log into the same web UI
-with a username/password), each with their **own custom policy** you
-write - there's no fixed set of built-in roles here, since what any given
-person should actually be able to touch is entirely specific to your
-setup.
+share day-to-day. `roles/vault_user` (invoked by `playbooks/manage_user.yml`)
+adds people as Vault's built-in `userpass` auth method users (so they log
+into the same web UI with a username/password), each with their **own
+custom policy** you write - there's no fixed set of built-in roles here,
+since what any given person should actually be able to touch is entirely
+specific to your setup.
 
-1. Write an HCL policy scoped to what that person needs - copy
-   `policies/example.hcl` as a starting point, don't apply it unedited.
+1. Write an HCL policy scoped to what that person needs and drop it in
+   `roles/vault_user/files/policies/` - copy `example.hcl` there as a
+   starting point, don't apply it unedited.
 2. Add (or update) the user:
 
    ```bash
@@ -166,15 +168,14 @@ setup.
      -e target_username=alice \
      -e target_password='<a password you chose - not auto-generated>' \
      -e target_policy_name=alice-policy \
-     -e target_policy_file="$(pwd)/policies/alice.hcl"
+     -e target_policy_file=alice.hcl
    ```
 
-   **`target_policy_file` must be an absolute path** (`$(pwd)/...` from the
-   repo root works) - the `copy` module resolves a relative one against
-   the *playbook's own directory* (`playbooks/`, plus a `playbooks/files/`
-   subdir it also checks), not against your current shell directory, so
-   e.g. plain `policies/alice.hcl` fails with "Could not find or access"
-   even though the file is right there one level up.
+   **`target_policy_file` is just a filename**, not a path - Ansible's
+   `copy` module automatically resolves a relative `src` against the
+   role's own `files/` directory first, so as long as `alice.hcl` lives in
+   `roles/vault_user/files/policies/`, this works from anywhere, no path
+   to get wrong.
 
    Safe to re-run: enabling `userpass` is skipped if already enabled,
    re-uploading the same policy name overwrites it with the new file's
@@ -265,12 +266,22 @@ looked before any of this ran.
   configured means `apt-get update` hangs or fails outright instead of
   quietly using only the offline repo. Renamed, not deleted, so it's
   reversible if you ever reconnect the host to the internet.
-- **`manage_user.yml` targets `vault_cluster[0]` and shells out to the real
+- **`vault_user` targets `vault_cluster[0]` and shells out to the real
   `vault` CLI**, the same style as `init.yml`/`unseal.yml`/
   `check_cluster.yml`, rather than adding a new collection dependency
   (e.g. `community.hashi_vault`) or the `uri` module just for this - one
   fewer thing to install/version-pin, and it's already proven to work
   against this cluster's TLS setup (`-ca-cert={{ vault_tls_dir }}/ca.pem`).
+- **`vault_user` is a role, unlike `init`/`unseal`/`check_cluster`/`destroy`
+  (which stay flat playbooks)** - a deliberate exception to this project's
+  usual "roles are only for things reused/composed across multiple
+  playbooks" rule. It moved into a role specifically so its policy files
+  could live under `roles/vault_user/files/policies/` and be found by
+  Ansible's own automatic role-file resolution - solving a real, reported
+  point of friction where a relative `target_policy_file` path was silently
+  resolved against the *playbook's* directory instead of the caller's
+  shell `cwd`. Wrapping it in a role isn't about reuse here; it's what
+  gets you a `files/` search path for free.
 - **Policies are per-user HCL files copied to the Vault node, not inlined
   into a `vault policy write - <<EOF` shell heredoc** - real policies
   contain quotes/braces that are painful and fragile to get right escaped

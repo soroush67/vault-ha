@@ -12,7 +12,7 @@
 #     -e target_username=alice \
 #     -e target_password='S3cret!' \
 #     -e target_policy_name=alice-policy \
-#     -e target_policy_file=./policies/alice.hcl
+#     -e target_policy_file=alice.hcl
 #
 # Remove a user (optionally its policy too, if nothing else uses it):
 #   ansible-playbook -i <inventory> playbooks/manage_user.yml \
@@ -21,10 +21,13 @@
 #     -e target_state=absent \
 #     -e target_policy_name=alice-policy   # omit to leave the policy in place
 #
-# target_policy_file is a local HCL file on the control node - write one per
-# user, scoped to exactly what they need (see policies/example.hcl for a
-# starting point). Nothing here decides what a policy should contain -
-# that's entirely usage-specific, same as any real Vault deployment.
+# target_policy_file is just a filename (e.g. "alice.hcl"), not a path -
+# write one HCL file per user, scoped to exactly what they need, and drop
+# it in roles/vault_user/files/policies/ (copy
+# roles/vault_user/files/policies/example.hcl as a starting point).
+# Ansible finds it there automatically - no path to get wrong. Nothing
+# here decides what a policy should contain - that's entirely
+# usage-specific, same as any real Vault deployment.
 - name: Manage a Vault userpass user + their custom policy
   hosts: vault_cluster[0]
   become: true
@@ -35,83 +38,5 @@
   environment:
     VAULT_ADDR: "https://{{ ansible_host }}:{{ vault_api_port }}"
     VAULT_TOKEN: "{{ vault_root_token | default('') }}"
-  tasks:
-    - name: Require the fields this playbook actually needs
-      ansible.builtin.fail:
-        msg: >-
-          Pass -e vault_root_token=... -e target_username=... and, for
-          target_state=present, also -e target_password=...
-          -e target_policy_name=... -e target_policy_file=<local HCL path>.
-      when: >
-        (vault_root_token | default('') | length == 0) or
-        (target_username | default('') | length == 0) or
-        (target_state == 'present' and (
-          (target_password | default('') | length == 0) or
-          (target_policy_name | length == 0) or
-          (target_policy_file | default('') | length == 0)
-        ))
-
-    - name: Check whether userpass auth is already enabled
-      ansible.builtin.command:
-        cmd: "vault auth list -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
-      register: vault_auth_list
-      changed_when: false
-
-    - name: Enable the userpass auth method
-      ansible.builtin.command:
-        cmd: "vault auth enable -ca-cert={{ vault_tls_dir }}/ca.pem userpass"
-      when: "'userpass/' not in (vault_auth_list.stdout | from_json)"
-
-    - name: Upload this user's custom policy
-      when: target_state == "present"
-      block:
-        - name: Copy the policy file to the Vault node
-          ansible.builtin.copy:
-            src: "{{ target_policy_file }}"
-            dest: "/tmp/vault-policy-{{ target_policy_name }}.hcl"
-            mode: "0600"
-
-        - name: Write the policy into Vault
-          ansible.builtin.command:
-            cmd: >-
-              vault policy write -ca-cert={{ vault_tls_dir }}/ca.pem
-              {{ target_policy_name }} /tmp/vault-policy-{{ target_policy_name }}.hcl
-
-        - name: Remove the temporary policy file
-          ansible.builtin.file:
-            path: "/tmp/vault-policy-{{ target_policy_name }}.hcl"
-            state: absent
-
-    - name: Create/update the user
-      ansible.builtin.command:
-        cmd: >-
-          vault write -ca-cert={{ vault_tls_dir }}/ca.pem
-          auth/userpass/users/{{ target_username }}
-          password={{ target_password | default('') }}
-          policies={{ target_policy_name }}
-      when: target_state == "present"
-      no_log: true
-
-    - name: Confirm the user now exists
-      ansible.builtin.command:
-        cmd: "vault read -ca-cert={{ vault_tls_dir }}/ca.pem -format=json auth/userpass/users/{{ target_username }}"
-      register: vault_user_check
-      when: target_state == "present"
-      changed_when: false
-
-    - name: Show the user's assigned policies
-      ansible.builtin.debug:
-        msg: >-
-          {{ target_username }}: policies={{ (vault_user_check.stdout | from_json).data.token_policies }}
-      when: target_state == "present"
-
-    - name: Delete the user
-      ansible.builtin.command:
-        cmd: "vault delete -ca-cert={{ vault_tls_dir }}/ca.pem auth/userpass/users/{{ target_username }}"
-      when: target_state == "absent"
-
-    - name: Delete the user's policy too, if given
-      ansible.builtin.command:
-        cmd: "vault policy delete -ca-cert={{ vault_tls_dir }}/ca.pem {{ target_policy_name }}"
-      when: target_state == "absent" and target_policy_name | length > 0
-      failed_when: false
+  roles:
+    - vault_user
