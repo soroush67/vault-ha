@@ -1,0 +1,60 @@
+---
+# Enables Vault's syslog audit device - a full log of every request Vault
+# handles (who, what, when), written to the syslog of whichever node is
+# currently the active leader (only the leader actually serves requests;
+# standbys just forward to it). Audit devices are a cluster-wide Vault
+# setting (stored in Raft, not per-node config), so enabling it once via
+# any node applies to the whole cluster - this targets vault_cluster[0]
+# for that reason, same as playbooks/manage_user.yml.
+#
+# Because leadership can move between nodes (failover, restart, a future
+# site.yml run that regenerates configs), the audit trail ends up split
+# across whichever node(s) were leader at any given time. Point each
+# node's syslog/rsyslog at a central log collector yourself if you want
+# one aggregated stream - genuinely environment-specific, left to you.
+#
+#   ansible-playbook -i <inventory> playbooks/enable_audit.yml \
+#     -e vault_root_token=<root or a sufficiently privileged token>
+#
+# Safe to re-run - does nothing if a device is already enabled at
+# audit_device_path.
+- name: Enable Vault's syslog audit device
+  hosts: vault_cluster[0]
+  become: true
+  gather_facts: false
+  vars:
+    audit_device_path: syslog
+    audit_syslog_tag: vault
+    audit_syslog_facility: AUTH
+  environment:
+    VAULT_ADDR: "https://{{ ansible_host }}:{{ vault_api_port }}"
+    VAULT_TOKEN: "{{ vault_root_token | default('') }}"
+  tasks:
+    - name: Require vault_root_token
+      ansible.builtin.fail:
+        msg: "Pass -e vault_root_token=<root or a sufficiently privileged token>."
+      when: vault_root_token | default('') | length == 0
+
+    - name: Check which audit devices are already enabled
+      ansible.builtin.command:
+        cmd: "vault audit list -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+      register: vault_audit_list
+      changed_when: false
+
+    - name: Enable the syslog audit device
+      ansible.builtin.command:
+        cmd: >-
+          vault audit enable -ca-cert={{ vault_tls_dir }}/ca.pem
+          -path={{ audit_device_path }}
+          syslog tag="{{ audit_syslog_tag }}" facility="{{ audit_syslog_facility }}"
+      when: "(audit_device_path ~ '/') not in (vault_audit_list.stdout | from_json)"
+
+    - name: Confirm the audit devices now enabled
+      ansible.builtin.command:
+        cmd: "vault audit list -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+      register: vault_audit_list_after
+      changed_when: false
+
+    - name: Show enabled audit devices
+      ansible.builtin.debug:
+        var: vault_audit_list_after.stdout | from_json

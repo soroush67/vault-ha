@@ -55,6 +55,7 @@ playbooks/
   add_node.yml              Add a new node to the existing Raft cluster
   check_cluster.yml         Read-only: every node unsealed, optionally the real Raft peer list
   manage_user.yml           Thin wrapper around roles/vault_user - see "Managing individual users"
+  enable_audit.yml          Enables Vault's syslog audit device - see "Enabling audit logging"
   build_offline_repo.yml    Builds offline-repo/'s portable apt repo (vault + haproxy + every dependency) - see "Offline install"
   destroy.yml               Completely removes Vault (and HAProxy) from every node - all data, no undo - see "Destroying the cluster"
 offline-repo/               Portable: build once with real internet, copy the whole directory anywhere, docker-compose up -d there
@@ -195,6 +196,29 @@ specific to your setup.
      -e target_policy_name=alice-policy
    ```
 
+## Enabling audit logging
+
+Turns on Vault's `syslog` audit device - a complete log of every request
+Vault handles (who did what, when), written to the syslog of whichever
+node is currently the active leader:
+
+```bash
+ansible-playbook -i <inventory> playbooks/enable_audit.yml \
+  -e vault_root_token=<root or a sufficiently privileged token>
+```
+
+Safe to re-run - does nothing if a device is already enabled at that
+path. Audit devices are a cluster-wide Vault setting (stored in Raft, not
+per-node config), so this only ever needs to run once, against any one
+node.
+
+Because leadership can move between nodes over time (failover, a
+restart), the actual audit trail ends up split across whichever node(s)
+were leader at different points - forward each node's syslog to a central
+log collector yourself (rsyslog remote forwarding, a log shipper, etc.)
+if you want one aggregated stream; which collector to use is genuinely
+environment-specific and left to you.
+
 ## Destroying the cluster
 
 Completely removes Vault (and HAProxy, by default) from every node:
@@ -297,6 +321,18 @@ looked before any of this ran.
   keys (which Vault itself generates and can never show again), a
   userpass password is something the operator picks and hands to that
   person directly - there's nothing here for this playbook to "show once."
+- **`enable_audit.yml` uses a `syslog` device, not a `file` device** - per
+  explicit choice: relies on the host's existing syslog/rsyslog rather
+  than managing a dedicated log file's path/rotation/permissions itself,
+  and composes naturally if you already forward syslog to a central
+  collector. A `file` device would be simpler for a single all-in-one
+  host but adds file-rotation concerns this project doesn't otherwise
+  need to own.
+- **`enable_audit.yml` is its own standalone playbook, not folded into
+  `site.yml`** - per explicit choice, matching `init.yml`/`unseal.yml`/
+  `manage_user.yml`: an operator decision made once (or rarely
+  reconfigured), not part of the routine node-provisioning path every
+  `site.yml` run repeats.
 - **`destroy.yml` refuses to run without `-e confirm_destroy=yes`**, checked
   as a normal per-host task at the top of *each* destructive play, not via
   a separate confirmation-only play. Tried that first - a `hosts:
@@ -315,8 +351,10 @@ looked before any of this ran.
   only, per explicit request. Real operational cost: every Vault restart
   (host reboot, systemd restart, a config change) needs a human to run
   `unseal.yml` with 3 of the keys before that node serves traffic again.
-- **Audit logging** - not enabled by default; a real production Vault
-  should have at least one audit device turned on.
+- **Central aggregation of audit logs across nodes** - `enable_audit.yml`
+  turns on the `syslog` device cluster-wide, but forwarding each node's
+  local syslog to one central collector (so the trail doesn't stay split
+  across whichever node was leader at any given time) is left to you.
 - **Automated snapshots/backups** of the Raft data directory.
 - **Secrets engines** (KV mounts, database secrets, PKI, etc.) - this only
   stands up the cluster and, via `manage_user.yml`, userpass
