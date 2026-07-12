@@ -1,7 +1,7 @@
 ---
 # --- Vault version / packaging ---
 vault_version: "1.21.4"
-vault_apt_codename: "{{ ansible_distribution_release }}"
+vault_apt_codename: "{{ ansible_facts['distribution_release'] }}"
 
 # --- Cluster ---
 vault_cluster_name: "vault-ha"
