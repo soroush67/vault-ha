@@ -1,0 +1,31 @@
+---
+# Single-node develop bring-up: one real Vault service on one node - same
+# roles, same real TLS, same real Raft storage as the production 3-node
+# cluster, just without HAProxy (nothing to load-balance across with only
+# one node) - use this with inventory/develop/, not playbooks/site.yml.
+#
+# A single-node Raft cluster works the same way a multi-node one does:
+# roles/vault_install's template just renders zero retry_join blocks (no
+# other vault_cluster members to list), and `vault operator init`
+# bootstraps this one node as its own Raft leader.
+#
+#   ansible-playbook -i inventory/develop/hosts.ini playbooks/site_develop.yml
+#   ansible-playbook -i inventory/develop/hosts.ini playbooks/init.yml
+#   ansible-playbook -i inventory/develop/hosts.ini playbooks/unseal.yml \
+#     -e unseal_key_1=... -e unseal_key_2=... -e unseal_key_3=...
+#
+# Everything else (manage_user.yml, enable_audit.yml, check_cluster.yml,
+# destroy.yml, add_node.yml if you ever want to grow this into a real
+# multi-node cluster) works unchanged against this inventory too.
+- name: Configure a single-node Vault develop instance
+  hosts: vault_cluster
+  become: true
+  roles:
+    - vault_repo
+    - vault_install
+    - vault_tls
+  tasks:
+    - name: Start vault now that config + certs are both in place
+      ansible.builtin.systemd:
+        name: vault
+        state: started

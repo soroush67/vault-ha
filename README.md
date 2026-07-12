@@ -36,10 +36,13 @@ HAProxy load balancer in front that always routes to the current leader.
 ## Layout
 
 ```
-inventory/sample/          Copy this, fill in real values
+inventory/sample/          Copy this, fill in real values - 3-node HA cluster + HAProxy
   hosts.ini                 3 vault_cluster hosts + 1 haproxy_lb + empty new_members (INI format)
   inventory.yml             Same hosts/groups, YAML format - use whichever you prefer, not both
   group_vars/all/main.yml   All tunables (version, ports, TLS validity, cluster name...)
+inventory/develop/         Copy this instead for a single-node, no-HAProxy setup - see "Develop environment"
+  hosts.ini/inventory.yml    One vault_cluster host, no haproxy_lb group at all
+  group_vars/all/main.yml   Same tunables, vault_cluster_name defaults to "vault-dev"
 roles/
   vault_repo/               Adds HashiCorp's official apt repo + GPG key (or the offline one - see below)
   vault_install/            Installs vault, templates vault.hcl (Raft storage + retry_join + TLS + ui=true), enables (not starts) the service
@@ -49,7 +52,8 @@ roles/
     files/policies/           Per-user HCL policy files live here - Ansible finds them automatically, just a bare filename
       example.hcl              A starting-point policy - copy it per user, don't apply it unedited
 playbooks/
-  site.yml                  Full bring-up, in the dependency order that actually matters
+  site.yml                  Full bring-up (3-node cluster + HAProxy), in the dependency order that actually matters
+  site_develop.yml          Single-node bring-up, no HAProxy - use with inventory/develop/ - see "Develop environment"
   init.yml                  One-time: initializes the Raft cluster, shows unseal keys + root token ONCE
   unseal.yml                Unseals every node (existing + newly-added) with 3 of the keys init.yml showed
   add_node.yml              Add a new node to the existing Raft cluster
@@ -88,6 +92,31 @@ ansible-playbook -i inventory/production/hosts.ini playbooks/check_cluster.yml
 Then open `https://<any node or the HAProxy address>:8200/ui` and log in
 with the root token (create real auth methods/policies and stop using the
 root token day-to-day, same as any real Vault deployment).
+
+## Develop environment
+
+For a single Vault node - no HA, no HAProxy, nothing to load-balance
+across - use `inventory/develop/` and `playbooks/site_develop.yml`
+instead of the production ones. Same roles, same real TLS, same real
+Raft storage under the hood; just one member instead of three:
+
+```bash
+cp -r inventory/develop inventory/mydev
+# edit hosts.ini (or inventory.yml) with a real ansible_host IP/user
+
+ansible-galaxy collection install -r requirements.yml
+ansible-playbook -i inventory/mydev/hosts.ini playbooks/site_develop.yml
+
+ansible-playbook -i inventory/mydev/hosts.ini playbooks/init.yml
+ansible-playbook -i inventory/mydev/hosts.ini playbooks/unseal.yml \
+  -e unseal_key_1=<key1> -e unseal_key_2=<key2> -e unseal_key_3=<key3>
+```
+
+Everything else - `manage_user.yml`, `enable_audit.yml`,
+`check_cluster.yml`, `destroy.yml`, even `add_node.yml` if you later
+decide to grow this into a real multi-node cluster - works unchanged
+against this inventory too; they all just look at whatever's in
+`vault_cluster`/`haproxy_lb`, whether that's one host or several.
 
 ## Scaling the cluster
 
@@ -328,6 +357,17 @@ looked before any of this ran.
   collector. A `file` device would be simpler for a single all-in-one
   host but adds file-rotation concerns this project doesn't otherwise
   need to own.
+- **`site_develop.yml` is a separate playbook, not `site.yml` run against
+  a 1-host inventory** - `site.yml`'s HAProxy play would still technically
+  work fine with an empty `haproxy_lb` group (Ansible just skips a play
+  with no matching hosts, non-destructively - unlike the confirmation-gate
+  bug in `destroy.yml`, above), but a dedicated dev playbook makes the
+  intent explicit and keeps dev runs from even mentioning HAProxy in their
+  output. The actual cluster config (Raft storage, TLS, the `vault_install`
+  template) needed zero changes to support a single node - `vault.hcl.j2`'s
+  `retry_join` loop just renders zero blocks when there's only one member
+  in `vault_cluster`, and a lone node bootstraps as its own Raft leader on
+  `vault operator init` the same way any node would.
 - **`enable_audit.yml` is its own standalone playbook, not folded into
   `site.yml`** - per explicit choice, matching `init.yml`/`unseal.yml`/
   `manage_user.yml`: an operator decision made once (or rarely
