@@ -52,6 +52,7 @@ playbooks/
   add_node.yml              Add a new node to the existing Raft cluster
   check_cluster.yml         Read-only: every node unsealed, optionally the real Raft peer list
   build_offline_repo.yml    Builds offline-repo/'s portable apt repo (vault + haproxy + every dependency) - see "Offline install"
+  destroy.yml               Completely removes Vault (and HAProxy) from every node - all data, no undo - see "Destroying the cluster"
 offline-repo/               Portable: build once with real internet, copy the whole directory anywhere, docker-compose up -d there
   docker-compose.yml         One nginx service serving the flat apt repo
   nginx-autoindex.conf        Same stock-default.conf-wins fix kubespray-webui's Offline Install hit - see that project's CLAUDE.md gotcha #4
@@ -141,6 +142,26 @@ hang or fail trying to reach mirrors this host can't actually reach.
 `init.yml`/`unseal.yml`/`check_cluster.yml` are unaffected either way -
 they only ever talk to Vault's own API, never apt.
 
+## Destroying the cluster
+
+Completely removes Vault (and HAProxy, by default) from every node:
+service stopped, package purged, **all data deleted** - the entire Raft
+storage directory, config, and TLS certs. There is no undo. If this Vault
+holds real secrets and you don't have a separate backup, they are gone
+permanently once this runs.
+
+Refuses to run without an explicit confirmation extra-var:
+
+```bash
+ansible-playbook -i <inventory> playbooks/destroy.yml -e confirm_destroy=yes
+# keep HAProxy (e.g. reusing it for something else):
+ansible-playbook -i <inventory> playbooks/destroy.yml -e confirm_destroy=yes -e destroy_haproxy=false
+```
+
+It also re-enables the host's default Ubuntu apt sources if
+`vault_offline_mode` had disabled them, leaving the host closer to how it
+looked before any of this ran.
+
 ## Why these specific design choices
 
 - **Integrated Storage (Raft), not Consul**: fewer moving parts to
@@ -192,6 +213,17 @@ they only ever talk to Vault's own API, never apt.
   configured means `apt-get update` hangs or fails outright instead of
   quietly using only the offline repo. Renamed, not deleted, so it's
   reversible if you ever reconnect the host to the internet.
+- **`destroy.yml` refuses to run without `-e confirm_destroy=yes`**, checked
+  as a normal per-host task at the top of *each* destructive play, not via
+  a separate confirmation-only play. Tried that first - a `hosts:
+  localhost` play whose only job is the confirmation check *does* stop a
+  normal run when it fails, but `--limit vault_cluster` skips a play with
+  no matching hosts entirely ("no hosts matched") rather than treating it
+  as a failure, so the destructive play still ran with the gate never
+  evaluated at all. Verified directly (a synthetic two-play test,
+  reproducing exactly this) before settling on checking it inside every
+  play that actually does something, which no `--limit` combination can
+  route around.
 
 ## Known gaps (not built here, ask if you want them)
 

@@ -1,0 +1,125 @@
+---
+# COMPLETELY removes Vault from every node: stops the service, purges the
+# package, and deletes ALL data (the entire Raft storage directory),
+# config, and TLS certs. There is NO undo - if this Vault holds real
+# secrets and you don't have a separate backup, they are gone permanently
+# once this runs. Also tears down HAProxy by default (set
+# destroy_haproxy=false to keep it, e.g. if you're reusing it for
+# something else).
+#
+# Refuses to run without an explicit confirmation extra-var, so this can't
+# happen by accident:
+#   ansible-playbook -i <inventory> playbooks/destroy.yml -e confirm_destroy=yes
+#   ansible-playbook -i <inventory> playbooks/destroy.yml -e confirm_destroy=yes -e destroy_haproxy=false
+#
+# The confirmation check is a normal per-host task at the top of EACH play
+# below (not a separate `hosts: localhost` play that runs the check once)
+# - deliberately, verified directly: a separate confirmation-only play can
+# be skipped entirely with e.g. `--limit vault_cluster` ("no hosts
+# matched"), letting the destructive play run with the gate never having
+# been evaluated at all. Putting the same check inside every play that
+# actually does something destructive means no `--limit` combination can
+# reach the destructive tasks without also hitting the check first.
+
+- name: Remove Vault completely from every node
+  hosts: vault_cluster
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Refuse to run without explicit confirmation
+      ansible.builtin.fail:
+        msg: >-
+          This completely destroys the Vault cluster - every node's data,
+          config, and TLS certs, with no undo. Re-run with
+          -e confirm_destroy=yes to actually do this.
+      when: not (confirm_destroy | default(false) | bool)
+
+    - name: Stop and disable vault
+      ansible.builtin.systemd:
+        name: vault
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Purge the vault package
+      ansible.builtin.apt:
+        name: vault
+        state: absent
+        purge: true
+
+    - name: Remove the vault data directory (ALL Raft data - irreversible)
+      ansible.builtin.file:
+        path: "{{ vault_data_dir }}"
+        state: absent
+
+    - name: Remove the vault config directory (including TLS certs)
+      ansible.builtin.file:
+        path: "{{ vault_config_dir }}"
+        state: absent
+
+    - name: Remove the HashiCorp apt repo file, if present (online mode)
+      ansible.builtin.file:
+        path: /etc/apt/sources.list.d/hashicorp.list
+        state: absent
+
+    - name: Remove the offline apt repo file, if present (offline mode)
+      ansible.builtin.file:
+        path: /etc/apt/sources.list.d/vault-offline.list
+        state: absent
+
+    # Best-effort, harmless either way (no-op via creates/removes if
+    # roles/vault_repo never disabled these on this host in the first
+    # place - e.g. it was never run in offline mode here).
+    - name: Re-enable the host's default Ubuntu apt sources if disabled (deb822 format)
+      ansible.builtin.command:
+        cmd: mv /etc/apt/sources.list.d/ubuntu.sources.disabled /etc/apt/sources.list.d/ubuntu.sources
+        creates: /etc/apt/sources.list.d/ubuntu.sources
+        removes: /etc/apt/sources.list.d/ubuntu.sources.disabled
+      failed_when: false
+
+    - name: Re-enable the host's default Ubuntu apt sources if disabled (legacy format)
+      ansible.builtin.command:
+        cmd: mv /etc/apt/sources.list.disabled /etc/apt/sources.list
+        creates: /etc/apt/sources.list
+        removes: /etc/apt/sources.list.disabled
+      failed_when: false
+
+    - name: Update apt cache after repo changes
+      ansible.builtin.apt:
+        update_cache: true
+
+- name: Remove HAProxy completely
+  hosts: haproxy_lb
+  become: true
+  gather_facts: false
+  vars:
+    destroy_haproxy: true
+  tasks:
+    - name: Refuse to run without explicit confirmation
+      ansible.builtin.fail:
+        msg: >-
+          This completely destroys the Vault cluster - every node's data,
+          config, and TLS certs, with no undo. Re-run with
+          -e confirm_destroy=yes to actually do this.
+      when: not (confirm_destroy | default(false) | bool)
+
+    - name: Stop and disable haproxy
+      ansible.builtin.systemd:
+        name: haproxy
+        state: stopped
+        enabled: false
+      failed_when: false
+      when: destroy_haproxy
+
+    - name: Purge the haproxy package
+      ansible.builtin.apt:
+        name: haproxy
+        state: absent
+        purge: true
+      when: destroy_haproxy
+
+    - name: Remove haproxy config
+      ansible.builtin.file:
+        path: /etc/haproxy/haproxy.cfg
+        state: absent
+      when: destroy_haproxy
