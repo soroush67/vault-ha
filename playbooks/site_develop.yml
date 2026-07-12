@@ -1,8 +1,11 @@
 ---
 # Single-node develop bring-up: one real Vault service on one node - same
-# roles, same real TLS, same real Raft storage as the production 3-node
-# cluster, just without HAProxy (nothing to load-balance across with only
-# one node) - use this with inventory/develop/, not playbooks/site.yml.
+# roles, same real Raft storage as the production 3-node cluster, just
+# without HAProxy (nothing to load-balance across with only one node) -
+# use this with inventory/develop/, not playbooks/site.yml. TLS is
+# controlled the same way as production, via vault_tls_enabled in
+# group_vars - inventory/develop's default has it set to false (plain
+# HTTP), see README.md "Running over plain HTTP".
 #
 # A single-node Raft cluster works the same way a multi-node one does:
 # roles/vault_install's template just renders zero retry_join blocks (no
@@ -23,7 +26,8 @@
   roles:
     - vault_repo
     - vault_install
-    - vault_tls
+    - role: vault_tls
+      when: vault_tls_enabled | bool
   tasks:
     - name: Start vault now that config + certs are both in place
       ansible.builtin.systemd:

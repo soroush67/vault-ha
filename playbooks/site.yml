@@ -1,9 +1,9 @@
 ---
 # Full cluster bring-up, in dependency order:
 #   1. Every Vault node: repo, install+configure (but NOT start - see
-#      roles/vault_install's own comment for why), TLS certs (needs the
-#      `vault` user the install step created), then start explicitly once
-#      both are in place.
+#      roles/vault_install's own comment for why), TLS certs if
+#      vault_tls_enabled (needs the `vault` user the install step
+#      created), then start explicitly once everything is in place.
 #   2. HAProxy - last, so there's something already running for it to
 #      health-check by the time it starts.
 #
@@ -16,7 +16,8 @@
   roles:
     - vault_repo
     - vault_install
-    - vault_tls
+    - role: vault_tls
+      when: vault_tls_enabled | bool
   tasks:
     - name: Start vault now that config + certs are both in place
       ansible.builtin.systemd:

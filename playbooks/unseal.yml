@@ -15,12 +15,15 @@
   hosts: vault_cluster:new_members
   become: true
   gather_facts: false
+  vars:
+    vault_scheme: "{{ 'https' if (vault_tls_enabled | bool) else 'http' }}"
+    vault_ca_cert_flag: "{{ ('-ca-cert=' + vault_tls_dir + '/ca.pem') if (vault_tls_enabled | bool) else '' }}"
   environment:
-    VAULT_ADDR: "https://{{ ansible_host }}:{{ vault_api_port }}"
+    VAULT_ADDR: "{{ vault_scheme }}://{{ ansible_host }}:{{ vault_api_port }}"
   tasks:
     - name: Check this node's seal status
       ansible.builtin.command:
-        cmd: "vault status -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+        cmd: "vault status {{ vault_ca_cert_flag }} -format=json"
       register: vault_status_result
       failed_when: false
       changed_when: false
@@ -31,25 +34,25 @@
 
     - name: Unseal (key 1 of 3)
       ansible.builtin.command:
-        cmd: "vault operator unseal -ca-cert={{ vault_tls_dir }}/ca.pem {{ unseal_key_1 }}"
+        cmd: "vault operator unseal {{ vault_ca_cert_flag }} {{ unseal_key_1 }}"
       when: vault_is_sealed
       no_log: true
 
     - name: Unseal (key 2 of 3)
       ansible.builtin.command:
-        cmd: "vault operator unseal -ca-cert={{ vault_tls_dir }}/ca.pem {{ unseal_key_2 }}"
+        cmd: "vault operator unseal {{ vault_ca_cert_flag }} {{ unseal_key_2 }}"
       when: vault_is_sealed
       no_log: true
 
     - name: Unseal (key 3 of 3)
       ansible.builtin.command:
-        cmd: "vault operator unseal -ca-cert={{ vault_tls_dir }}/ca.pem {{ unseal_key_3 }}"
+        cmd: "vault operator unseal {{ vault_ca_cert_flag }} {{ unseal_key_3 }}"
       when: vault_is_sealed
       no_log: true
 
     - name: Confirm this node's status now
       ansible.builtin.command:
-        cmd: "vault status -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+        cmd: "vault status {{ vault_ca_cert_flag }} -format=json"
       register: vault_status_after
       changed_when: false
 

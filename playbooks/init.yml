@@ -19,12 +19,14 @@
   vars:
     vault_key_shares: 5
     vault_key_threshold: 3
+    vault_scheme: "{{ 'https' if (vault_tls_enabled | bool) else 'http' }}"
+    vault_ca_cert_flag: "{{ ('-ca-cert=' + vault_tls_dir + '/ca.pem') if (vault_tls_enabled | bool) else '' }}"
   environment:
-    VAULT_ADDR: "https://{{ ansible_host }}:{{ vault_api_port }}"
+    VAULT_ADDR: "{{ vault_scheme }}://{{ ansible_host }}:{{ vault_api_port }}"
   tasks:
     - name: Check whether this cluster is already initialized
       ansible.builtin.command:
-        cmd: "vault operator init -status -ca-cert={{ vault_tls_dir }}/ca.pem"
+        cmd: "vault operator init -status {{ vault_ca_cert_flag }}"
       register: vault_init_status
       failed_when: false
       changed_when: false
@@ -44,7 +46,7 @@
           -key-shares={{ vault_key_shares }}
           -key-threshold={{ vault_key_threshold }}
           -format=json
-          -ca-cert={{ vault_tls_dir }}/ca.pem
+          {{ vault_ca_cert_flag }}
       register: vault_init_result
       when: "'Vault is initialized' not in vault_init_status.stdout"
 

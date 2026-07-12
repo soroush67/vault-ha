@@ -11,12 +11,14 @@ defaults
     timeout client  30s
     timeout server  30s
 
-# TCP passthrough, not HTTP - Vault's own TLS terminates at each node, not
-# here (see README.md "Why these specific design choices" - never
-# re-terminate TLS for a secrets manager at an intermediate hop unless it
-# genuinely must). The httpchk below still inspects Vault's real
-# /v1/sys/health response *through* that same TLS connection (check-ssl),
-# it just doesn't decrypt client traffic itself.
+# TCP passthrough, not HTTP - when vault_tls_enabled, Vault's own TLS
+# terminates at each node, not here (see README.md "Why these specific
+# design choices" - never re-terminate TLS for a secrets manager at an
+# intermediate hop unless it genuinely must). The httpchk below still
+# inspects Vault's real /v1/sys/health response *through* that same TLS
+# connection (check-ssl), it just doesn't decrypt client traffic itself.
+# When TLS is disabled cluster-wide, the health check and passthrough are
+# both just plain HTTP, matching the backend.
 frontend vault_front
     bind *:{{ haproxy_bind_port }}
     default_backend vault_back
@@ -32,7 +34,7 @@ backend vault_back
     option httpchk GET /v1/sys/health
     http-check expect status 200
 {% for h in groups['vault_cluster'] %}
-    server {{ h }} {{ hostvars[h].ansible_host }}:{{ vault_api_port }} check check-ssl verify none port {{ vault_api_port }}
+    server {{ h }} {{ hostvars[h].ansible_host }}:{{ vault_api_port }} check{% if vault_tls_enabled | bool %} check-ssl verify none{% endif %} port {{ vault_api_port }}
 {% endfor %}
 
 listen stats

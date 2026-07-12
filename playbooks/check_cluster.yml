@@ -5,12 +5,15 @@
   hosts: vault_cluster
   become: true
   gather_facts: false
+  vars:
+    vault_scheme: "{{ 'https' if (vault_tls_enabled | bool) else 'http' }}"
+    vault_ca_cert_flag: "{{ ('-ca-cert=' + vault_tls_dir + '/ca.pem') if (vault_tls_enabled | bool) else '' }}"
   environment:
-    VAULT_ADDR: "https://{{ ansible_host }}:{{ vault_api_port }}"
+    VAULT_ADDR: "{{ vault_scheme }}://{{ ansible_host }}:{{ vault_api_port }}"
   tasks:
     - name: Query this node's status
       ansible.builtin.command:
-        cmd: "vault status -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+        cmd: "vault status {{ vault_ca_cert_flag }} -format=json"
       register: vault_status_result
       changed_when: false
 
@@ -41,13 +44,15 @@
   gather_facts: false
   vars:
     vault_root_token: ""
+    vault_scheme: "{{ 'https' if (vault_tls_enabled | bool) else 'http' }}"
+    vault_ca_cert_flag: "{{ ('-ca-cert=' + vault_tls_dir + '/ca.pem') if (vault_tls_enabled | bool) else '' }}"
   environment:
-    VAULT_ADDR: "https://{{ ansible_host }}:{{ vault_api_port }}"
+    VAULT_ADDR: "{{ vault_scheme }}://{{ ansible_host }}:{{ vault_api_port }}"
     VAULT_TOKEN: "{{ vault_root_token }}"
   tasks:
     - name: List Raft peers
       ansible.builtin.command:
-        cmd: "vault operator raft list-peers -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+        cmd: "vault operator raft list-peers {{ vault_ca_cert_flag }} -format=json"
       register: vault_peers_result
       when: vault_root_token | length > 0
 

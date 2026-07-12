@@ -23,10 +23,17 @@ vault_log_level: "info"
 vault_ui_enabled: true
 
 # --- TLS ---
-# Self-signed CA generated once by roles/vault_tls (on the control node,
-# not on any Vault host) and distributed to every node - real Vault
-# deployments should always use TLS, this isn't optional. Bring your own
-# CA/certs instead by skipping roles/vault_tls and dropping files at
+# Set to false to run Vault (and HAProxy's health check/passthrough) over
+# plain HTTP instead - no cert generation, no roles/vault_tls at all. Real
+# Vault deployments should use TLS; only disable this on a network you
+# genuinely trust (see README.md "Running over plain HTTP" for what this
+# does and doesn't protect against). Per explicit choice, this repo's own
+# sample inventories now default to false in both environments.
+vault_tls_enabled: false
+# Only relevant when vault_tls_enabled is true - self-signed CA generated
+# once by roles/vault_tls (on the control node, not on any Vault host) and
+# distributed to every node. Bring your own CA/certs instead by skipping
+# roles/vault_tls and dropping files at
 # {{ vault_tls_dir }}/{ca.pem,cert.pem,key.pem} yourself before running
 # roles/vault_install.
 vault_tls_cert_days: 3650

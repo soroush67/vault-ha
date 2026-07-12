@@ -26,8 +26,10 @@
     audit_device_path: syslog
     audit_syslog_tag: vault
     audit_syslog_facility: AUTH
+    vault_scheme: "{{ 'https' if (vault_tls_enabled | bool) else 'http' }}"
+    vault_ca_cert_flag: "{{ ('-ca-cert=' + vault_tls_dir + '/ca.pem') if (vault_tls_enabled | bool) else '' }}"
   environment:
-    VAULT_ADDR: "https://{{ ansible_host }}:{{ vault_api_port }}"
+    VAULT_ADDR: "{{ vault_scheme }}://{{ ansible_host }}:{{ vault_api_port }}"
     VAULT_TOKEN: "{{ vault_root_token | default('') }}"
   tasks:
     - name: Require vault_root_token
@@ -37,21 +39,21 @@
 
     - name: Check which audit devices are already enabled
       ansible.builtin.command:
-        cmd: "vault audit list -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+        cmd: "vault audit list {{ vault_ca_cert_flag }} -format=json"
       register: vault_audit_list
       changed_when: false
 
     - name: Enable the syslog audit device
       ansible.builtin.command:
         cmd: >-
-          vault audit enable -ca-cert={{ vault_tls_dir }}/ca.pem
+          vault audit enable {{ vault_ca_cert_flag }}
           -path={{ audit_device_path }}
           syslog tag="{{ audit_syslog_tag }}" facility="{{ audit_syslog_facility }}"
       when: "(audit_device_path ~ '/') not in (vault_audit_list.stdout | from_json)"
 
     - name: Confirm the audit devices now enabled
       ansible.builtin.command:
-        cmd: "vault audit list -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+        cmd: "vault audit list {{ vault_ca_cert_flag }} -format=json"
       register: vault_audit_list_after
       changed_when: false
 

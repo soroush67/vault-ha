@@ -2,8 +2,10 @@
 
 Ansible playbooks for a production-oriented, HA HashiCorp Vault cluster on
 Ubuntu: Integrated Storage (Raft) - no external Consul cluster needed -
-TLS everywhere, Vault's own built-in web UI (not a custom one), and an
-HAProxy load balancer in front that always routes to the current leader.
+TLS support that's toggleable per environment (`vault_tls_enabled` - see
+"Running over plain HTTP"), Vault's own built-in web UI (not a custom
+one), and an HAProxy load balancer in front that always routes to the
+current leader.
 
 ## Architecture
 
@@ -14,16 +16,19 @@ HAProxy load balancer in front that always routes to the current leader.
 - **UI**: Vault's own built-in web UI (`ui = true` in `vault.hcl`) - per
   explicit request, this does *not* build a separate custom UI project the
   way `kubespray-webui` did for kubespray. Reach it at
-  `https://<any node>:8200/ui` directly, or through the load balancer.
+  `https://<any node>:8200/ui` (or `http://` - see below) directly, or
+  through the load balancer.
 - **HAProxy** (`haproxy_lb`) - TCP passthrough (never terminates Vault's
-  TLS - see "Why", below), health-checking each node's real
-  `/v1/sys/health` response so it only ever routes to the current
-  active+unsealed leader, failing over automatically when leadership
-  changes.
-- **TLS**: a self-signed CA generated once (on the control node, not any
-  Vault host) and a per-node cert signed by it - real Vault deployments
-  should always use TLS, this isn't optional here. Bring your own CA
-  instead by skipping `roles/vault_tls` and dropping files at
+  TLS when `vault_tls_enabled` - see "Why", below), health-checking each
+  node's real `/v1/sys/health` response so it only ever routes to the
+  current active+unsealed leader, failing over automatically when
+  leadership changes.
+- **TLS**: controlled by `vault_tls_enabled` (default `false` in both
+  sample inventories, per explicit choice - see "Running over plain
+  HTTP" for what that trades away). When `true`: a self-signed CA
+  generated once (on the control node, not any Vault host) and a per-node
+  cert signed by it. Bring your own CA instead by skipping
+  `roles/vault_tls` and dropping files at
   `{{ vault_tls_dir }}/{ca.pem,cert.pem,key.pem}` yourself.
 - **Unseal**: Shamir's Secret Sharing (Vault's default) - 5 key shares, 3
   needed to unseal. Manual by design (no cloud KMS auto-unseal) - fits a
@@ -45,8 +50,8 @@ inventory/develop/         Copy this instead for a single-node, no-HAProxy setup
   group_vars/all/main.yml   Same tunables, vault_cluster_name defaults to "vault-dev"
 roles/
   vault_repo/               Adds HashiCorp's official apt repo + GPG key (or the offline one - see below)
-  vault_install/            Installs vault, templates vault.hcl (Raft storage + retry_join + TLS + ui=true), enables (not starts) the service
-  vault_tls/                Generates the CA once + a per-node cert/key signed by it
+  vault_install/            Installs vault, templates vault.hcl (Raft storage + retry_join + TLS/HTTP + ui=true), enables (not starts) the service
+  vault_tls/                Only runs when vault_tls_enabled: true - generates the CA once + a per-node cert/key signed by it
   haproxy_lb/                Installs/configures HAProxy (TCP passthrough + Vault-aware health check)
   vault_user/               Adds/updates/removes one userpass user + their custom policy - see "Managing individual users"
     files/policies/           Per-user HCL policy files live here - Ansible finds them automatically, just a bare filename
@@ -89,7 +94,8 @@ ansible-playbook -i inventory/production/hosts.ini playbooks/unseal.yml \
 ansible-playbook -i inventory/production/hosts.ini playbooks/check_cluster.yml
 ```
 
-Then open `https://<any node or the HAProxy address>:8200/ui` and log in
+Then open `https://<any node or the HAProxy address>:8200/ui` (or
+`http://` if `vault_tls_enabled: false` - the sample default) and log in
 with the root token (create real auth methods/policies and stop using the
 root token day-to-day, same as any real Vault deployment).
 
@@ -97,8 +103,9 @@ root token day-to-day, same as any real Vault deployment).
 
 For a single Vault node - no HA, no HAProxy, nothing to load-balance
 across - use `inventory/develop/` and `playbooks/site_develop.yml`
-instead of the production ones. Same roles, same real TLS, same real
-Raft storage under the hood; just one member instead of three:
+instead of the production ones. Same roles, same real Raft storage under
+the hood, same `vault_tls_enabled` toggle (defaults to `false` here too -
+see "Running over plain HTTP"); just one member instead of three:
 
 ```bash
 cp -r inventory/develop inventory/mydev
@@ -117,6 +124,43 @@ Everything else - `manage_user.yml`, `enable_audit.yml`,
 decide to grow this into a real multi-node cluster - works unchanged
 against this inventory too; they all just look at whatever's in
 `vault_cluster`/`haproxy_lb`, whether that's one host or several.
+
+## Running over plain HTTP
+
+`vault_tls_enabled` (in `group_vars/all/main.yml`) controls whether this
+project sets up TLS at all:
+
+- `true` - `roles/vault_tls` generates a CA and per-node certs, and
+  Vault's listener uses `tls_cert_file`/`tls_key_file`.
+- `false` - `roles/vault_tls` doesn't run at all, and Vault's listener
+  gets `tls_disable = true` instead, so it talks plain HTTP.
+
+Both `inventory/sample/` and `inventory/develop/` currently default this
+to `false`, per explicit choice. Switching it either applies on the next
+`site.yml`/`site_develop.yml` run against the inventory (Vault's config
+gets re-templated and the service restarts) - no separate migration step.
+
+**What `false` actually means:**
+
+- Every request to Vault - including secrets themselves, tokens, and
+  unseal keys sent to `/v1/sys/unseal` - travels the network in
+  cleartext. Anyone able to observe traffic between a client and Vault,
+  or between HAProxy and a Vault node, can read all of it.
+- HAProxy's health check and passthrough both become plain HTTP too (no
+  `check-ssl` on the backend `server` lines - see `roles/haproxy_lb`).
+- **One thing does not change regardless of this setting**: Vault's own
+  internal Raft/replication port (`cluster_addr`, 8201) always uses
+  `https://` with Vault's own auto-managed internal certificate - this
+  was confirmed directly against a real Vault 1.21.4 server (its startup
+  log reports `Cluster Address: https://...` even when the rendered
+  config says `http://`; Vault silently overrides it). This is Vault's
+  own behavior, not something this project controls either way, and
+  needs no certificate material from `roles/vault_tls` to work.
+
+**Only set `vault_tls_enabled: false` on a network you genuinely
+trust** - e.g. an isolated lab network, or a private network already
+secured some other way (this repo doesn't verify or enforce that for
+you).
 
 ## Scaling the cluster
 
@@ -213,7 +257,8 @@ specific to your setup.
    password/policies.
 3. Give `alice` her username/password directly (out of band - this
    playbook never writes them anywhere) - she logs in at
-   `https://<any node or the LB>:8200/ui` with them.
+   `https://<any node or the LB>:8200/ui` (or `http://` if
+   `vault_tls_enabled: false`) with them.
 4. Remove a user later (optionally her policy too, if nothing else
    references it):
 
@@ -281,19 +326,31 @@ looked before any of this ran.
   is just "start Vault with the right config," not a separate join
   command. This is also why `add_node.yml` doesn't touch existing nodes
   at all - joining is initiated entirely from the new node's side.
-- **`vault_install` enables but does not start the service** - its
-  `vault.hcl` references TLS cert files that don't exist on disk yet at
-  that point (`roles/vault_tls` runs after it, since generating/copying
-  those files needs the `vault` system user this role's package install
-  creates first). `site.yml`/`add_node.yml` both start the service
-  explicitly as their last step, once both roles have actually run.
+- **`vault_install` enables but does not start the service** - when
+  `vault_tls_enabled`, its `vault.hcl` references TLS cert files that
+  don't exist on disk yet at that point (`roles/vault_tls` runs after it,
+  since generating/copying those files needs the `vault` system user this
+  role's package install creates first). `site.yml`/`site_develop.yml`/
+  `add_node.yml` all start the service explicitly as their last step,
+  once every prerequisite role has actually run - TLS or not.
+- **`vault_tls_enabled` is a single toggle, not a separate "http" fork of
+  the roles/templates** - per explicit request to run both the production
+  and develop environments over plain HTTP. Kept as one variable
+  (`roles/vault_install/templates/vault.hcl.j2` branches on it for the
+  listener block, `retry_join` scheme, and `api_addr` scheme;
+  `roles/haproxy_lb`'s template branches on it for `check-ssl`; every
+  playbook that shells out to `vault` builds its `-ca-cert=...` flag and
+  `VAULT_ADDR` scheme from it too) rather than duplicating roles, so
+  either mode stays a one-line change in `group_vars/all/main.yml`, not a
+  divergent codepath to maintain twice.
 - **HAProxy runs in TCP mode, passthrough - it never terminates Vault's
-  TLS.** Re-terminating TLS at an intermediate hop for a secrets manager
-  specifically is the kind of shortcut that's easy to regret - this way
-  traffic is genuinely end-to-end encrypted to whichever Vault node
-  actually serves it. `option httpchk` + `check-ssl` still let HAProxy
-  inspect the real `/v1/sys/health` response *through* that same TLS
-  connection to decide routing, without decrypting client traffic itself.
+  TLS when `vault_tls_enabled`.** Re-terminating TLS at an intermediate
+  hop for a secrets manager specifically is the kind of shortcut that's
+  easy to regret - this way traffic is genuinely end-to-end encrypted to
+  whichever Vault node actually serves it (when TLS is on at all).
+  `option httpchk` + `check-ssl` still let HAProxy inspect the real
+  `/v1/sys/health` response *through* that same TLS connection to decide
+  routing, without decrypting client traffic itself.
 - **HAProxy's health check uses Vault's default `/v1/sys/health` behavior
   (no `standbyok`/`perfstandbyok` query params)** - deliberately, so it
   only ever considers the current active+unsealed leader "up," failing

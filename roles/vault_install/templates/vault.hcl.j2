@@ -9,22 +9,36 @@ storage "raft" {
 {% for h in groups['vault_cluster'] %}
 {% if h != inventory_hostname %}
   retry_join {
-    leader_api_addr         = "https://{{ hostvars[h].ansible_host }}:{{ vault_api_port }}"
+    leader_api_addr         = "{{ 'https' if (vault_tls_enabled | bool) else 'http' }}://{{ hostvars[h].ansible_host }}:{{ vault_api_port }}"
+{% if vault_tls_enabled | bool %}
     leader_ca_cert_file     = "{{ vault_tls_dir }}/ca.pem"
     leader_client_cert_file = "{{ vault_tls_dir }}/cert.pem"
     leader_client_key_file  = "{{ vault_tls_dir }}/key.pem"
+{% endif %}
   }
 {% endif %}
 {% endfor %}
 }
 
 listener "tcp" {
-  address       = "0.0.0.0:{{ vault_api_port }}"
+  address = "0.0.0.0:{{ vault_api_port }}"
+{% if vault_tls_enabled | bool %}
   tls_cert_file = "{{ vault_tls_dir }}/cert.pem"
   tls_key_file  = "{{ vault_tls_dir }}/key.pem"
+{% else %}
+  tls_disable = true
+{% endif %}
 }
 
-api_addr     = "https://{{ ansible_host }}:{{ vault_api_port }}"
+api_addr     = "{{ 'https' if (vault_tls_enabled | bool) else 'http' }}://{{ ansible_host }}:{{ vault_api_port }}"
+{# The Raft/replication port (cluster_addr) is always https, even with
+   vault_tls_enabled=false: Vault manages this port's encryption itself
+   (an internally auto-generated cert, unrelated to the client-facing
+   listener's TLS material above), and ignores/overrides a plain http://
+   value here regardless - confirmed directly against a real Vault
+   1.21.4 server (its own startup log reports "Cluster Address:
+   https://..." even when this is set to http://, and `vault status`
+   after unsealing shows "HA Cluster: https://..." the same way). #}
 cluster_addr = "https://{{ ansible_host }}:{{ vault_cluster_port }}"
 
 ui = {{ vault_ui_enabled | lower }}

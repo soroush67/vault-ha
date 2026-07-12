@@ -22,7 +22,8 @@
   roles:
     - vault_repo
     - vault_install
-    - vault_tls
+    - role: vault_tls
+      when: vault_tls_enabled | bool
   tasks:
     - name: Start vault now that config + certs are both in place
       ansible.builtin.systemd:

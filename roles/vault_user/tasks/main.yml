@@ -32,13 +32,13 @@
 
 - name: Check whether userpass auth is already enabled
   ansible.builtin.command:
-    cmd: "vault auth list -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+    cmd: "vault auth list {{ vault_ca_cert_flag }} -format=json"
   register: vault_auth_list
   changed_when: false
 
 - name: Enable the userpass auth method
   ansible.builtin.command:
-    cmd: "vault auth enable -ca-cert={{ vault_tls_dir }}/ca.pem userpass"
+    cmd: "vault auth enable {{ vault_ca_cert_flag }} userpass"
   when: "'userpass/' not in (vault_auth_list.stdout | from_json)"
 
 - name: Upload this user's custom policy
@@ -53,7 +53,7 @@
     - name: Write the policy into Vault
       ansible.builtin.command:
         cmd: >-
-          vault policy write -ca-cert={{ vault_tls_dir }}/ca.pem
+          vault policy write {{ vault_ca_cert_flag }}
           {{ target_policy_name }} /tmp/vault-policy-{{ target_policy_name }}.hcl
 
     - name: Remove the temporary policy file
@@ -64,7 +64,7 @@
 - name: Create/update the user
   ansible.builtin.command:
     cmd: >-
-      vault write -ca-cert={{ vault_tls_dir }}/ca.pem
+      vault write {{ vault_ca_cert_flag }}
       auth/userpass/users/{{ target_username }}
       password={{ target_password | default('') }}
       policies={{ target_policy_name }}
@@ -73,7 +73,7 @@
 
 - name: Confirm the user now exists
   ansible.builtin.command:
-    cmd: "vault read -ca-cert={{ vault_tls_dir }}/ca.pem -format=json auth/userpass/users/{{ target_username }}"
+    cmd: "vault read {{ vault_ca_cert_flag }} -format=json auth/userpass/users/{{ target_username }}"
   register: vault_user_check
   when: target_state == "present"
   changed_when: false
@@ -86,11 +86,11 @@
 
 - name: Delete the user
   ansible.builtin.command:
-    cmd: "vault delete -ca-cert={{ vault_tls_dir }}/ca.pem auth/userpass/users/{{ target_username }}"
+    cmd: "vault delete {{ vault_ca_cert_flag }} auth/userpass/users/{{ target_username }}"
   when: target_state == "absent"
 
 - name: Delete the user's policy too, if given
   ansible.builtin.command:
-    cmd: "vault policy delete -ca-cert={{ vault_tls_dir }}/ca.pem {{ target_policy_name }}"
+    cmd: "vault policy delete {{ vault_ca_cert_flag }} {{ target_policy_name }}"
   when: target_state == "absent" and target_policy_name | length > 0
   failed_when: false
