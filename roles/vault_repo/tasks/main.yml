@@ -1,0 +1,58 @@
+---
+# --- Online mode (default): the real HashiCorp repo ---
+- name: Install prerequisites for adding a third-party apt repo (online mode)
+  ansible.builtin.apt:
+    name:
+      - gnupg
+      - curl
+      - ca-certificates
+      - lsb-release
+    state: present
+    update_cache: true
+  when: not vault_offline_mode
+
+- name: Add the HashiCorp apt GPG key
+  ansible.builtin.get_url:
+    url: https://apt.releases.hashicorp.com/gpg
+    dest: /usr/share/keyrings/hashicorp-archive-keyring.asc
+    mode: "0644"
+  when: not vault_offline_mode
+
+- name: Add the HashiCorp apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [ signed-by=/usr/share/keyrings/hashicorp-archive-keyring.asc ]
+      https://apt.releases.hashicorp.com {{ vault_apt_codename }} main
+    filename: hashicorp
+    state: present
+    update_cache: true
+  when: not vault_offline_mode
+
+# --- Offline mode: the portable flat repo from offline-repo/, built by
+# playbooks/build_offline_repo.yml. None of the online-mode prerequisites
+# above are actually needed here - no key fetch (trusted=yes), no HTTPS
+# (plain HTTP flat repo), no lsb_release lookup (vault_apt_codename isn't
+# used in this branch) - and installing them from apt before the offline
+# repo itself is even configured would be a chicken-and-egg problem in a
+# genuinely air-gapped environment (nothing else reachable yet).
+- name: Disable the host's default Ubuntu apt sources (deb822 format, Ubuntu 24.04+)
+  ansible.builtin.command:
+    cmd: mv /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources.disabled
+    creates: /etc/apt/sources.list.d/ubuntu.sources.disabled
+    removes: /etc/apt/sources.list.d/ubuntu.sources
+  when: vault_offline_mode
+
+- name: Disable the host's default Ubuntu apt sources (legacy format, pre-24.04)
+  ansible.builtin.command:
+    cmd: mv /etc/apt/sources.list /etc/apt/sources.list.disabled
+    creates: /etc/apt/sources.list.disabled
+    removes: /etc/apt/sources.list
+  when: vault_offline_mode
+
+- name: Add the offline flat apt repo
+  ansible.builtin.apt_repository:
+    repo: "deb [trusted=yes] {{ vault_offline_repo_url }}/ ./"
+    filename: vault-offline
+    state: present
+    update_cache: true
+  when: vault_offline_mode

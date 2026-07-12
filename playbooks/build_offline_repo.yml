@@ -1,0 +1,73 @@
+---
+# Builds a self-contained, portable offline apt repo (offline-repo/)
+# containing the vault .deb package AND every dependency needed to
+# install it - vault, haproxy, and their transitive deps, for Ubuntu only
+# (matching what these playbooks target). Uses a real Ubuntu container to
+# guarantee package compatibility with the actual target release, the same
+# technique kubespray-webui's own offline-install feature uses for exactly
+# the same reason.
+#
+# Run this ONCE on any machine with real internet access + Docker:
+#   ansible-playbook playbooks/build_offline_repo.yml
+#   ansible-playbook playbooks/build_offline_repo.yml -e ubuntu_release=22.04
+#
+# Then copy the whole offline-repo/ directory (docker-compose.yml +
+# nginx-autoindex.conf + the now-populated packages/) to wherever you'll
+# actually install Vault from - no internet needed there. Start it with
+# `docker-compose up -d` in that directory, then point roles/vault_repo at
+# it by setting vault_offline_mode: true and vault_offline_repo_url in
+# your inventory's group_vars (see README.md "Offline install").
+- name: Build the offline apt repo (vault + haproxy + all dependencies)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ubuntu_release: "24.04"
+    offline_repo_dir: "{{ playbook_dir }}/../offline-repo"
+  tasks:
+    - name: Ensure the offline-repo packages directory exists
+      ansible.builtin.file:
+        path: "{{ offline_repo_dir }}/packages"
+        state: directory
+        mode: "0755"
+
+    - name: Download vault + haproxy + all dependencies inside a real Ubuntu {{ ubuntu_release }} container
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker run --rm -v {{ offline_repo_dir }}/packages:/out ubuntu:{{ ubuntu_release }} bash -c '
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends gnupg curl ca-certificates lsb-release
+          curl -fsSL https://apt.releases.hashicorp.com/gpg -o /usr/share/keyrings/hashicorp-archive-keyring.asc
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.asc] https://apt.releases.hashicorp.com $(lsb_release -cs) main" > /etc/apt/sources.list.d/hashicorp.list
+          apt-get update
+          apt-get install -y --download-only --reinstall vault haproxy gnupg curl ca-certificates lsb-release
+          cp /var/cache/apt/archives/*.deb /out/
+          cp /usr/share/keyrings/hashicorp-archive-keyring.asc /out/
+        '
+      args:
+        executable: /bin/bash
+      register: offline_download_result
+      changed_when: true
+
+    - name: Build the flat apt repo index (dpkg-scanpackages)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker run --rm -v {{ offline_repo_dir }}/packages:/repo -w /repo ubuntu:{{ ubuntu_release }} bash -c '
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends dpkg-dev
+          dpkg-scanpackages --multiversion . /dev/null | gzip -9c > Packages.gz
+        '
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: List what landed in the offline repo
+      ansible.builtin.command: "ls -la {{ offline_repo_dir }}/packages"
+      register: offline_repo_contents
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        var: offline_repo_contents.stdout_lines

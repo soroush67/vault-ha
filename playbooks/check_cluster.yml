@@ -1,0 +1,62 @@
+---
+# Read-only health check: confirms every node is unsealed, and (if you
+# pass a token) shows the real Raft peer list.
+- name: Check every Vault node's seal status
+  hosts: vault_cluster
+  become: true
+  gather_facts: false
+  environment:
+    VAULT_ADDR: "https://{{ ansible_host }}:{{ vault_api_port }}"
+  tasks:
+    - name: Query this node's status
+      ansible.builtin.command:
+        cmd: "vault status -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+      register: vault_status_result
+      changed_when: false
+
+    - name: Parse status
+      ansible.builtin.set_fact:
+        vault_status: "{{ vault_status_result.stdout | from_json }}"
+
+    - name: Show this node's status
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: sealed={{ vault_status.sealed }},
+          ha_mode={{ vault_status.ha_mode | default('n/a') }},
+          version={{ vault_status.version | default('?') }}
+
+    - name: Assert this node is unsealed
+      ansible.builtin.assert:
+        that:
+          - not vault_status.sealed
+        fail_msg: "CLUSTER CHECK FAILED - {{ inventory_hostname }} is sealed."
+        success_msg: "{{ inventory_hostname }}: unsealed OK."
+
+# Raft peer listing needs an authenticated token - optional, since the
+# root token is sensitive and not something this check should need by
+# default. Pass -e vault_root_token=... to also see it.
+- name: Check Raft peer list (optional, needs a token)
+  hosts: vault_cluster[0]
+  become: true
+  gather_facts: false
+  vars:
+    vault_root_token: ""
+  environment:
+    VAULT_ADDR: "https://{{ ansible_host }}:{{ vault_api_port }}"
+    VAULT_TOKEN: "{{ vault_root_token }}"
+  tasks:
+    - name: List Raft peers
+      ansible.builtin.command:
+        cmd: "vault operator raft list-peers -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+      register: vault_peers_result
+      when: vault_root_token | length > 0
+
+    - name: Show Raft peers
+      ansible.builtin.debug:
+        var: (vault_peers_result.stdout | from_json)
+      when: vault_root_token | length > 0
+
+    - name: Note if no token was given
+      ansible.builtin.debug:
+        msg: "Pass -e vault_root_token=<root token> to also list Raft peers - skipped."
+      when: vault_root_token | length == 0

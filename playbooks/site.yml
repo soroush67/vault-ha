@@ -1,0 +1,30 @@
+---
+# Full cluster bring-up, in dependency order:
+#   1. Every Vault node: repo, install+configure (but NOT start - see
+#      roles/vault_install's own comment for why), TLS certs (needs the
+#      `vault` user the install step created), then start explicitly once
+#      both are in place.
+#   2. HAProxy - last, so there's something already running for it to
+#      health-check by the time it starts.
+#
+# This does NOT initialize or unseal the cluster - that's a one-time,
+# security-sensitive operation with its own playbook (playbooks/init.yml),
+# deliberately kept separate from routine config/software updates.
+- name: Configure the Vault Raft cluster
+  hosts: vault_cluster
+  become: true
+  roles:
+    - vault_repo
+    - vault_install
+    - vault_tls
+  tasks:
+    - name: Start vault now that config + certs are both in place
+      ansible.builtin.systemd:
+        name: vault
+        state: started
+
+- name: Configure the HAProxy load balancer
+  hosts: haproxy_lb
+  become: true
+  roles:
+    - haproxy_lb

@@ -1,0 +1,43 @@
+{{ ansible_managed | comment }}
+
+global
+    log /dev/log local0
+    maxconn 4096
+
+defaults
+    log     global
+    mode    tcp
+    timeout connect 5s
+    timeout client  30s
+    timeout server  30s
+
+# TCP passthrough, not HTTP - Vault's own TLS terminates at each node, not
+# here (see README.md "Why these specific design choices" - never
+# re-terminate TLS for a secrets manager at an intermediate hop unless it
+# genuinely must). The httpchk below still inspects Vault's real
+# /v1/sys/health response *through* that same TLS connection (check-ssl),
+# it just doesn't decrypt client traffic itself.
+frontend vault_front
+    bind *:{{ haproxy_bind_port }}
+    default_backend vault_back
+
+backend vault_back
+    mode tcp
+    # No standbyok/perfstandbyok query params - Vault's default
+    # /v1/sys/health only returns 200 for the current active+unsealed
+    # leader, 429 for standbys, 503 for sealed. That's deliberate: this
+    # backend should only ever route to whichever node is genuinely
+    # writable right now, failing over automatically when leadership
+    # changes - not load-balance reads across standbys.
+    option httpchk GET /v1/sys/health
+    http-check expect status 200
+{% for h in groups['vault_cluster'] %}
+    server {{ h }} {{ hostvars[h].ansible_host }}:{{ vault_api_port }} check check-ssl verify none port {{ vault_api_port }}
+{% endfor %}
+
+listen stats
+    bind *:8404
+    mode http
+    stats enable
+    stats uri /
+    stats refresh 10s

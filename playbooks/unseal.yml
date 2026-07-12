@@ -1,0 +1,60 @@
+---
+# Unseals every Vault node (existing members and any freshly-added
+# [new_members] host) using the same threshold keys - run this after
+# init.yml the first time, and again after ANY vault process restart
+# (systemd restart, host reboot, a config change that triggered one via
+# site.yml/add_node.yml) since seal state lives in the process's memory,
+# not on disk - it does not survive a restart.
+#
+#   ansible-playbook -i <inventory> playbooks/unseal.yml \
+#     -e unseal_key_1=... -e unseal_key_2=... -e unseal_key_3=...
+#
+# Safe to re-run against already-unsealed nodes - checks each node's own
+# status first and does nothing if it's already unsealed.
+- name: Unseal every Vault node
+  hosts: vault_cluster:new_members
+  become: true
+  gather_facts: false
+  environment:
+    VAULT_ADDR: "https://{{ ansible_host }}:{{ vault_api_port }}"
+  tasks:
+    - name: Check this node's seal status
+      ansible.builtin.command:
+        cmd: "vault status -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+      register: vault_status_result
+      failed_when: false
+      changed_when: false
+
+    - name: Parse seal status
+      ansible.builtin.set_fact:
+        vault_is_sealed: "{{ (vault_status_result.stdout | from_json).sealed }}"
+
+    - name: Unseal (key 1 of 3)
+      ansible.builtin.command:
+        cmd: "vault operator unseal -ca-cert={{ vault_tls_dir }}/ca.pem {{ unseal_key_1 }}"
+      when: vault_is_sealed
+      no_log: true
+
+    - name: Unseal (key 2 of 3)
+      ansible.builtin.command:
+        cmd: "vault operator unseal -ca-cert={{ vault_tls_dir }}/ca.pem {{ unseal_key_2 }}"
+      when: vault_is_sealed
+      no_log: true
+
+    - name: Unseal (key 3 of 3)
+      ansible.builtin.command:
+        cmd: "vault operator unseal -ca-cert={{ vault_tls_dir }}/ca.pem {{ unseal_key_3 }}"
+      when: vault_is_sealed
+      no_log: true
+
+    - name: Confirm this node's status now
+      ansible.builtin.command:
+        cmd: "vault status -ca-cert={{ vault_tls_dir }}/ca.pem -format=json"
+      register: vault_status_after
+      changed_when: false
+
+    - name: Show this node's status
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: sealed={{ (vault_status_after.stdout | from_json).sealed }},
+          ha_mode={{ (vault_status_after.stdout | from_json).ha_mode | default('n/a') }}

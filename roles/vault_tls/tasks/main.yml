@@ -1,0 +1,122 @@
+---
+# Generates a CA once (on the control node, not any Vault host) and a
+# per-node cert/key signed by it - real Vault deployments should always
+# use TLS, this isn't optional. Bring your own CA/certs instead by
+# skipping this role and dropping files at
+# {{ vault_tls_dir }}/{ca.pem,cert.pem,key.pem} yourself.
+- name: Ensure a local working directory for the generated CA/certs exists
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/.tls"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  run_once: true
+
+- name: Check if the CA already exists
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/.tls/ca.pem"
+  delegate_to: localhost
+  run_once: true
+  register: vault_ca_stat
+
+- name: Generate the CA (once, reused for every node - only if it doesn't exist yet)
+  when: not vault_ca_stat.stat.exists
+  delegate_to: localhost
+  run_once: true
+  block:
+    - name: Generate the CA private key
+      ansible.builtin.command:
+        cmd: openssl genrsa -out {{ playbook_dir }}/.tls/ca-key.pem 4096
+        creates: "{{ playbook_dir }}/.tls/ca-key.pem"
+
+    - name: Generate the self-signed CA certificate
+      ansible.builtin.command:
+        cmd: >
+          openssl req -x509 -new -nodes -key {{ playbook_dir }}/.tls/ca-key.pem
+          -sha256 -days {{ vault_tls_cert_days }}
+          -subj "/CN={{ vault_cluster_name }}-ca"
+          -out {{ playbook_dir }}/.tls/ca.pem
+        creates: "{{ playbook_dir }}/.tls/ca.pem"
+
+- name: Generate this node's private key
+  ansible.builtin.command:
+    cmd: "openssl genrsa -out {{ playbook_dir }}/.tls/{{ inventory_hostname }}-key.pem 4096"
+    creates: "{{ playbook_dir }}/.tls/{{ inventory_hostname }}-key.pem"
+  delegate_to: localhost
+
+- name: Write this node's OpenSSL SAN config
+  ansible.builtin.copy:
+    dest: "{{ playbook_dir }}/.tls/{{ inventory_hostname }}.cnf"
+    mode: "0600"
+    content: |
+      [req]
+      distinguished_name = req_distinguished_name
+      req_extensions = v3_req
+      prompt = no
+      [req_distinguished_name]
+      CN = {{ inventory_hostname }}
+      [v3_req]
+      keyUsage = keyEncipherment, dataEncipherment, digitalSignature
+      extendedKeyUsage = serverAuth, clientAuth
+      subjectAltName = @alt_names
+      [alt_names]
+      DNS.1 = {{ inventory_hostname }}
+      DNS.2 = localhost
+      IP.1 = {{ ansible_host }}
+      IP.2 = 127.0.0.1
+  delegate_to: localhost
+
+- name: Generate this node's CSR
+  ansible.builtin.command:
+    cmd: >
+      openssl req -new -key {{ playbook_dir }}/.tls/{{ inventory_hostname }}-key.pem
+      -out {{ playbook_dir }}/.tls/{{ inventory_hostname }}.csr
+      -config {{ playbook_dir }}/.tls/{{ inventory_hostname }}.cnf
+    creates: "{{ playbook_dir }}/.tls/{{ inventory_hostname }}.csr"
+  delegate_to: localhost
+
+- name: Sign this node's certificate with the CA
+  ansible.builtin.command:
+    cmd: >
+      openssl x509 -req -in {{ playbook_dir }}/.tls/{{ inventory_hostname }}.csr
+      -CA {{ playbook_dir }}/.tls/ca.pem -CAkey {{ playbook_dir }}/.tls/ca-key.pem
+      -CAcreateserial -days {{ vault_tls_cert_days }} -sha256
+      -extensions v3_req -extfile {{ playbook_dir }}/.tls/{{ inventory_hostname }}.cnf
+      -out {{ playbook_dir }}/.tls/{{ inventory_hostname }}-cert.pem
+    creates: "{{ playbook_dir }}/.tls/{{ inventory_hostname }}-cert.pem"
+  delegate_to: localhost
+
+- name: Ensure the remote TLS directory exists
+  ansible.builtin.file:
+    path: "{{ vault_tls_dir }}"
+    state: directory
+    owner: vault
+    group: vault
+    mode: "0750"
+
+- name: Copy the CA certificate to this node
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/.tls/ca.pem"
+    dest: "{{ vault_tls_dir }}/ca.pem"
+    owner: vault
+    group: vault
+    mode: "0644"
+  notify: Restart vault
+
+- name: Copy this node's certificate
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/.tls/{{ inventory_hostname }}-cert.pem"
+    dest: "{{ vault_tls_dir }}/cert.pem"
+    owner: vault
+    group: vault
+    mode: "0644"
+  notify: Restart vault
+
+- name: Copy this node's private key
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/.tls/{{ inventory_hostname }}-key.pem"
+    dest: "{{ vault_tls_dir }}/key.pem"
+    owner: vault
+    group: vault
+    mode: "0400"
+  notify: Restart vault

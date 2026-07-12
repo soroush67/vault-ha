@@ -1,0 +1,49 @@
+---
+# Deliberately does NOT start the vault service (see the "enabled: true,
+# not started" task at the bottom) - the config this templates references
+# TLS cert files that roles/vault_tls hasn't copied yet at this point in
+# site.yml (it runs after this role, since it needs the `vault` user this
+# role creates in order to chown those files correctly). Starting vault
+# before the certs exist would just fail; site.yml starts it explicitly
+# once both roles have run.
+
+- name: Install the vault package pinned to vault_version
+  ansible.builtin.apt:
+    name: "vault={{ vault_version }}-*"
+    state: present
+  notify: Restart vault
+
+- name: Hold the vault package at the installed version
+  ansible.builtin.dpkg_selections:
+    name: vault
+    selection: hold
+
+- name: Create the vault data directory
+  ansible.builtin.file:
+    path: "{{ vault_data_dir }}"
+    state: directory
+    owner: vault
+    group: vault
+    mode: "0750"
+
+- name: Create the vault config directory
+  ansible.builtin.file:
+    path: "{{ vault_config_dir }}"
+    state: directory
+    owner: vault
+    group: vault
+    mode: "0750"
+
+- name: Template vault.hcl
+  ansible.builtin.template:
+    src: vault.hcl.j2
+    dest: "{{ vault_config_dir }}/vault.hcl"
+    owner: vault
+    group: vault
+    mode: "0640"
+  notify: Restart vault
+
+- name: Enable the vault service (not started yet - see comment above)
+  ansible.builtin.systemd:
+    name: vault
+    enabled: true

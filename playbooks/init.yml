@@ -1,0 +1,54 @@
+---
+# Initializes the Raft cluster - run this EXACTLY ONCE, ever, against a
+# fresh/never-initialized cluster (refuses to run again once initialized -
+# see the explicit check below - re-running init on an existing cluster
+# doesn't make sense and this won't let you do it by accident).
+#
+# Displays the unseal keys and root token exactly once. Vault does not
+# show them again - copy them somewhere safe (a password manager) the
+# moment this finishes. Nothing here writes them to any file.
+#
+#   ansible-playbook -i <inventory> playbooks/init.yml
+#
+# Then unseal every node with playbooks/unseal.yml using 3 of the 5 keys
+# just shown.
+- name: Initialize Vault (bootstraps the Raft cluster from the first node)
+  hosts: vault_cluster[0]
+  become: true
+  gather_facts: false
+  vars:
+    vault_key_shares: 5
+    vault_key_threshold: 3
+  environment:
+    VAULT_ADDR: "https://{{ ansible_host }}:{{ vault_api_port }}"
+  tasks:
+    - name: Check whether this cluster is already initialized
+      ansible.builtin.command:
+        cmd: "vault operator init -status -ca-cert={{ vault_tls_dir }}/ca.pem"
+      register: vault_init_status
+      failed_when: false
+      changed_when: false
+
+    - name: Refuse to re-initialize an already-initialized cluster
+      ansible.builtin.fail:
+        msg: >-
+          This cluster is already initialized - re-running init would not
+          produce usable new keys for it and could make things worse.
+          Nothing done.
+      when: "'Vault is initialized' in vault_init_status.stdout"
+
+    - name: Initialize Vault
+      ansible.builtin.command:
+        cmd: >
+          vault operator init
+          -key-shares={{ vault_key_shares }}
+          -key-threshold={{ vault_key_threshold }}
+          -format=json
+          -ca-cert={{ vault_tls_dir }}/ca.pem
+      register: vault_init_result
+      when: "'Vault is initialized' not in vault_init_status.stdout"
+
+    - name: SAVE THIS NOW - unseal keys and root token (shown only this once)
+      ansible.builtin.debug:
+        msg: "{{ vault_init_result.stdout }}"
+      when: vault_init_result is not skipped

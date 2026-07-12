@@ -1,0 +1,33 @@
+{{ ansible_managed | comment }}
+
+cluster_name = "{{ vault_cluster_name }}"
+
+storage "raft" {
+  path    = "{{ vault_data_dir }}"
+  node_id = "{{ inventory_hostname }}"
+
+{% for h in groups['vault_cluster'] %}
+{% if h != inventory_hostname %}
+  retry_join {
+    leader_api_addr         = "https://{{ hostvars[h].ansible_host }}:{{ vault_api_port }}"
+    leader_ca_cert_file     = "{{ vault_tls_dir }}/ca.pem"
+    leader_client_cert_file = "{{ vault_tls_dir }}/cert.pem"
+    leader_client_key_file  = "{{ vault_tls_dir }}/key.pem"
+  }
+{% endif %}
+{% endfor %}
+}
+
+listener "tcp" {
+  address       = "0.0.0.0:{{ vault_api_port }}"
+  tls_cert_file = "{{ vault_tls_dir }}/cert.pem"
+  tls_key_file  = "{{ vault_tls_dir }}/key.pem"
+}
+
+api_addr     = "https://{{ ansible_host }}:{{ vault_api_port }}"
+cluster_addr = "https://{{ ansible_host }}:{{ vault_cluster_port }}"
+
+ui = {{ vault_ui_enabled | lower }}
+log_level = "{{ vault_log_level }}"
+
+disable_mlock = false

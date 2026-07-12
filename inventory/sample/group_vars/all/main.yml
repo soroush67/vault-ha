@@ -1,0 +1,48 @@
+---
+# --- Vault version / packaging ---
+vault_version: "1.18.3"
+vault_apt_codename: "{{ ansible_distribution_release }}"
+
+# --- Cluster ---
+vault_cluster_name: "vault-ha"
+# Integrated Storage (Raft) - no external Consul cluster needed. See
+# README.md for why this was chosen over a Consul-backed setup.
+vault_api_port: 8200
+vault_cluster_port: 8201
+
+# --- Storage / paths ---
+vault_data_dir: /opt/vault/data
+vault_config_dir: /etc/vault.d
+vault_tls_dir: /etc/vault.d/tls
+vault_log_level: "info"
+
+# --- UI ---
+# The whole point of this setup, per the user's explicit request: use
+# Vault's own built-in web UI (a single `ui = true` config line) rather
+# than building a separate custom UI project.
+vault_ui_enabled: true
+
+# --- TLS ---
+# Self-signed CA generated once by roles/vault_tls (on the control node,
+# not on any Vault host) and distributed to every node - real Vault
+# deployments should always use TLS, this isn't optional. Bring your own
+# CA/certs instead by skipping roles/vault_tls and dropping files at
+# {{ vault_tls_dir }}/{ca.pem,cert.pem,key.pem} yourself before running
+# roles/vault_install.
+vault_tls_cert_days: 3650
+
+# --- HAProxy (fronts the cluster; TLS passthrough, never terminates
+# Vault's TLS - see README.md "Why these specific design choices") ---
+haproxy_enabled: true
+haproxy_bind_port: 8200
+
+# --- Offline install ---
+# Set to true to install vault/haproxy/their dependencies from a portable
+# offline apt repo (offline-repo/, built once by
+# playbooks/build_offline_repo.yml on a machine with real internet access)
+# instead of the real internet-facing HashiCorp/Ubuntu repos. See
+# README.md "Offline install" for the full workflow.
+vault_offline_mode: false
+# Reachable from every vault_cluster/haproxy_lb host - point this at
+# wherever offline-repo/'s docker-compose is actually running.
+vault_offline_repo_url: "http://CHANGE_ME:8081"

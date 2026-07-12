@@ -1,0 +1,6 @@
+*.retry
+.vault_pass
+# Generated CA + per-node private keys (roles/vault_tls) - never commit these.
+playbooks/.tls/
+*.pyc
+__pycache__/

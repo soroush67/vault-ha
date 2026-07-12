@@ -1,0 +1,30 @@
+---
+# Adds host(s) in [new_members] to the existing Raft cluster. Each new
+# node's own retry_join config (rendered the same way as any vault_cluster
+# member - see roles/vault_install/templates/vault.hcl.j2) points at the
+# EXISTING vault_cluster peers, so it joins automatically on first start -
+# Vault's own raft auto-join means existing nodes' configs/processes are
+# untouched by this (no unplanned restart of already-healthy nodes).
+#
+#   ansible-playbook -i <inventory> playbooks/add_node.yml
+#   ansible-playbook -i <inventory> playbooks/unseal.yml -e unseal_key_1=... -e unseal_key_2=... -e unseal_key_3=...
+#
+# Once you're happy it's healthy (playbooks/check_cluster.yml), move it
+# from [new_members] into [vault_cluster] in your inventory. Be aware: a
+# future site.yml run against the whole group will then regenerate every
+# node's config (their retry_join list now includes one more peer), which
+# DOES restart (and reseal) already-running nodes - that's an expected
+# consequence of how Raft peer config works, not a bug - just unseal them
+# again afterward with playbooks/unseal.yml.
+- name: Configure the new Vault node and join it to the existing cluster
+  hosts: new_members
+  become: true
+  roles:
+    - vault_repo
+    - vault_install
+    - vault_tls
+  tasks:
+    - name: Start vault now that config + certs are both in place
+      ansible.builtin.systemd:
+        name: vault
+        state: started

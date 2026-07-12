@@ -1,0 +1,25 @@
+---
+# YAML equivalent of hosts.ini - same hosts/groups. Use whichever you
+# prefer; only one needs to exist for a real inventory copy.
+all:
+  children:
+    vault_cluster:
+      hosts:
+        vault1:
+          ansible_host: 10.30.40.11
+        vault2:
+          ansible_host: 10.30.40.12
+        vault3:
+          ansible_host: 10.30.40.13
+      vars:
+        ansible_user: devops
+        ansible_port: 22
+    haproxy_lb:
+      hosts:
+        lb1:
+          ansible_host: 10.30.40.20
+      vars:
+        ansible_user: devops
+        ansible_port: 22
+    new_members:
+      hosts: {}
