@@ -302,6 +302,36 @@ step every engine type shares. Same style as `enable_audit.yml`: shells
 out to the real `vault` CLI, targets `vault_cluster[0]` only (secrets
 engine mounts are cluster-wide, stored in Raft), safe to re-run.
 
+**`target_engine_type` reference** - the value Vault OSS's `vault secrets
+enable` accepts as the engine type. Not exhaustive, and unlike the rest
+of this project's command construction (verified against a real running
+Vault), this specific list was **not** re-verified live against a real
+`vault secrets enable -h` this time - a real network problem in this
+environment blocked reaching HashiCorp's package repo while writing this
+section. Run `vault secrets enable -h` yourself against your own Vault
+to get the exact, version-accurate list before relying on an unusual one
+here.
+
+| `target_engine_type` | What it does |
+|---|---|
+| `kv` | Key/value storage - pass `target_engine_version=2` for the versioned KV v2 (the common case) or `1` for unversioned |
+| `pki` | Issues X.509 certificates - root/intermediate CA, roles, signing |
+| `database` | Dynamic, short-lived DB credentials - connections configured per-plugin after mounting (postgres, mysql, mssql, mongodb, ...) |
+| `ssh` | Signs SSH certificates or hands out one-time-use SSH passwords |
+| `transit` | Encryption/signing/HMAC as a service - Vault never returns the raw key |
+| `transform` | Format-preserving tokenization/masking - **Vault Enterprise only** |
+| `totp` | Generates and validates TOTP codes |
+| `ad` | Rotates/hands out Active Directory service account credentials |
+| `ldap` | Rotates/hands out credentials for LDAP-based directories generally (newer, broader than `ad`) |
+| `aws` / `azure` / `gcp` / `alicloud` | Dynamic, short-lived cloud provider IAM credentials |
+| `consul` | Dynamic Consul ACL tokens |
+| `nomad` | Dynamic Nomad ACL tokens |
+| `rabbitmq` | Dynamic RabbitMQ credentials |
+| `kubernetes` | Short-lived Kubernetes service account tokens |
+| `terraform` | Dynamic Terraform Cloud/Enterprise API tokens |
+| `mongodbatlas` | Dynamic MongoDB Atlas API credentials |
+| `cubbyhole`, `identity` | Always mounted, built into every Vault - not something you enable/disable yourself |
+
 Enable a KV v2 engine at `secret/`:
 
 ```bash
