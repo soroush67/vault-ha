@@ -65,6 +65,7 @@ playbooks/
   check_cluster.yml         Read-only: every node unsealed, optionally the real Raft peer list
   manage_user.yml           Thin wrapper around roles/vault_user - see "Managing individual users"
   enable_audit.yml          Enables Vault's syslog audit device - see "Enabling audit logging"
+  manage_secrets_engine.yml Enables/disables a secrets engine mount (kv, pki, database, ...) - see "Managing secrets engines"
   build_offline_repo.yml    Builds offline-repo/'s portable apt repo (vault + haproxy + every dependency) - see "Offline install"
   destroy.yml               Completely removes Vault (and HAProxy) from every node - all data, no undo - see "Destroying the cluster"
 offline-repo/               Portable: build once with real internet, copy the whole directory anywhere, docker-compose up -d there
@@ -293,6 +294,51 @@ log collector yourself (rsyslog remote forwarding, a log shipper, etc.)
 if you want one aggregated stream; which collector to use is genuinely
 environment-specific and left to you.
 
+## Managing secrets engines
+
+Enables or disables a secrets engine mount (`kv`, `pki`, `database`,
+`ssh`, `transit`, ...) - the generic "turn this engine on/off at a path"
+step every engine type shares. Same style as `enable_audit.yml`: shells
+out to the real `vault` CLI, targets `vault_cluster[0]` only (secrets
+engine mounts are cluster-wide, stored in Raft), safe to re-run.
+
+Enable a KV v2 engine at `secret/`:
+
+```bash
+ansible-playbook -i <inventory> playbooks/manage_secrets_engine.yml \
+  -e vault_root_token=<root or a sufficiently privileged token> \
+  -e target_engine_type=kv \
+  -e target_engine_path=secret \
+  -e target_engine_version=2
+```
+
+Enable a PKI engine at `pki/` with a 10-year max lease (path defaults to
+the engine type if you don't set one):
+
+```bash
+ansible-playbook -i <inventory> playbooks/manage_secrets_engine.yml \
+  -e vault_root_token=<token> \
+  -e target_engine_type=pki \
+  -e target_engine_max_lease_ttl=87600h
+```
+
+Disable an engine (**all data under that mount is gone, no undo**):
+
+```bash
+ansible-playbook -i <inventory> playbooks/manage_secrets_engine.yml \
+  -e vault_root_token=<token> \
+  -e target_engine_path=secret \
+  -e target_state=absent
+```
+
+**What this playbook does not do**: configure what's *inside* the engine
+once it's mounted - a PKI root CA + roles, a database connection +
+roles, KV values, transit keys, and so on are all deeply engine-specific
+and left to you (`vault write pki/root/generate/internal ...`, `vault
+write database/config/... `, etc.) - same "this repo stands up Vault,
+not what you store in it" boundary as the rest of this project (see
+"Known gaps" below).
+
 ## Destroying the cluster
 
 Completely removes Vault (and HAProxy, by default) from every node:
@@ -430,6 +476,15 @@ looked before any of this ran.
   `manage_user.yml`: an operator decision made once (or rarely
   reconfigured), not part of the routine node-provisioning path every
   `site.yml` run repeats.
+- **`manage_secrets_engine.yml` only manages the mount itself (enable at
+  a path / disable), not what's configured inside it** - deliberately
+  generic across engine types (`kv`, `pki`, `database`, ...) rather than
+  a separate playbook per engine type, since enabling a mount is the one
+  step every engine type genuinely shares; everything past that point
+  (a PKI root CA, a database connection, KV values) has a shape too
+  different per engine to usefully generalize, and is left to
+  `vault write` directly - same boundary as `manage_user.yml` not
+  deciding what a policy should contain.
 - **`destroy.yml` refuses to run without `-e confirm_destroy=yes`**, checked
   as a normal per-host task at the top of *each* destructive play, not via
   a separate confirmation-only play. Tried that first - a `hosts:
@@ -453,10 +508,11 @@ looked before any of this ran.
   local syslog to one central collector (so the trail doesn't stay split
   across whichever node was leader at any given time) is left to you.
 - **Automated snapshots/backups** of the Raft data directory.
-- **Secrets engines** (KV mounts, database secrets, PKI, etc.) - this only
-  stands up the cluster and, via `manage_user.yml`, userpass
-  logins/policies; what those policies actually grant access *to* is
-  deliberately left to you, it's entirely usage-specific.
+- **Configuring what's inside a secrets engine** - `manage_secrets_engine.yml`
+  enables/disables the mount itself (KV, database, PKI, ...), but a PKI
+  root CA + roles, a database connection + roles, KV values, and so on
+  are all deeply engine-specific and left to you; what a userpass user's
+  policy actually grants access *to* is equally usage-specific.
 - **Only the `userpass` auth method** is wired up (`manage_user.yml`) -
   no LDAP/OIDC/other auth backends. Fine for a small team with
   operator-issued credentials; revisit if you need SSO or don't want to
